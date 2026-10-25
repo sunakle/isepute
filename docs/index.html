@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpriteForge</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="menubar">
+    <span class="brand">SpriteForge</span>
+    <button data-cmd="new" title="Новый спрайт (Ctrl+N)">Новый</button>
+    <button data-cmd="open" title="Открыть спрайт из Unity (Ctrl+O)">Открыть</button>
+    <button data-cmd="save" title="Сохранить в Unity (Ctrl+S)">Сохранить в Unity</button>
+    <button data-cmd="importPng" title="Загрузить PNG с диска">Импорт PNG</button>
+    <button data-cmd="exportPng" title="Скачать sprite sheet">Экспорт PNG</button>
+    <button data-cmd="resize" title="Размер холста">Холст…</button>
+    <button data-cmd="settings" title="Путь к Unity-проекту">Unity…</button>
+    <label class="chk" title="Автоматически отправлять каждое изменение в Unity"><input type="checkbox" id="liveSync" checked> Live</label>
+    <span class="spacer"></span>
+    <input id="spriteName" value="untitled" spellcheck="false" title="Имя спрайта (имя файла в Unity)">
+    <span id="saveState" class="muted"></span>
+    <span id="unityState" class="pill off" title="Статус подключения Unity">Unity: нет связи</span>
+  </header>
+
+  <div id="toolopts">
+    <label>Кисть <input type="number" id="brushSize" min="1" max="32" value="1"></label>
+    <label class="chk"><input type="checkbox" id="pixelPerfect"> Pixel-perfect</label>
+    <label class="chk"><input type="checkbox" id="fillShape"> Заливка фигур</label>
+    <label class="chk"><input type="checkbox" id="showGrid" checked> Сетка</label>
+    <label class="chk"><input type="checkbox" id="onion"> Onion skin</label>
+    <label>Pivot
+      <select id="pivot">
+        <option value="center">Центр</option>
+        <option value="bottom">Низ-центр</option>
+        <option value="topleft">Верх-лево</option>
+      </select>
+    </label>
+    <label>PPU <input type="number" id="ppu" min="1" max="4096" value="16"></label>
+  </div>
+
+  <aside id="left">
+    <div id="palette"></div>
+    <div class="palbtns">
+      <button id="palAdd" title="Добавить основной цвет в палитру">+ цвет</button>
+      <button id="palDel" title="Удалить выбранный цвет из палитры">− цвет</button>
+    </div>
+    <div id="colors">
+      <div class="swatchwrap">
+        <input type="color" id="fgPick" title="Основной цвет (ЛКМ)">
+        <input type="color" id="bgPick" title="Фоновый цвет (ПКМ)">
+        <button id="swap" title="Поменять (X)">⇄</button>
+      </div>
+      <input id="fgHex" class="hex" spellcheck="false">
+      <label class="alpha">Alpha <input type="range" id="fgAlpha" min="0" max="255" value="255"></label>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <canvas id="view"></canvas>
+    <div id="preview">
+      <div class="phead">Превью <button id="previewPlay" title="Играть превью">▶</button></div>
+      <canvas id="previewCanvas" width="160" height="160"></canvas>
+    </div>
+  </main>
+
+  <aside id="tools"></aside>
+
+  <section id="timeline">
+    <div class="tlbar">
+      <button data-cmd="firstFrame" title="Первый кадр">⏮</button>
+      <button data-cmd="prevFrame" title="Предыдущий кадр (,)">◀</button>
+      <button data-cmd="play" id="playBtn" title="Проиграть (Enter)">▶</button>
+      <button data-cmd="nextFrame" title="Следующий кадр (.)">▶|</button>
+      <button data-cmd="lastFrame" title="Последний кадр">⏭</button>
+      <span class="sep"></span>
+      <button data-cmd="newFrame" title="Новый кадр — копия текущего (Alt+N)">+ кадр</button>
+      <button data-cmd="emptyFrame" title="Пустой кадр (Alt+B)">+ пустой</button>
+      <button data-cmd="delFrame" title="Удалить кадр (Alt+C)">− кадр</button>
+      <button data-cmd="frameLeft" title="Сдвинуть кадр влево">←</button>
+      <button data-cmd="frameRight" title="Сдвинуть кадр вправо">→</button>
+      <label>Длительность <input type="number" id="frameDur" min="10" max="10000" step="10" value="100"> мс</label>
+      <span class="sep"></span>
+      <button data-cmd="newLayer" title="Новый слой (Shift+N)">+ слой</button>
+      <button data-cmd="delLayer" title="Удалить слой">− слой</button>
+      <button data-cmd="layerUp" title="Слой выше">▲</button>
+      <button data-cmd="layerDown" title="Слой ниже">▼</button>
+    </div>
+    <div id="tlgrid"></div>
+  </section>
+
+  <footer id="status">
+    <span id="stPos">—</span>
+    <span id="stSize"></span>
+    <span id="stFrame"></span>
+    <span class="spacer"></span>
+    <span id="stZoom"></span>
+  </footer>
+</div>
+
+<div id="modal" hidden>
+  <div class="dialog">
+    <div class="dhead"><span id="dTitle"></span><button id="dClose">✕</button></div>
+    <div id="dBody"></div>
+  </div>
+</div>
+<input type="file" id="fileInput" accept="image/png" hidden>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
