@@ -13,6 +13,8 @@
     <button data-cmd="new" title="Новый спрайт (Ctrl+N)">Новый</button>
     <button data-cmd="open" title="Открыть спрайт из Unity (Ctrl+O)">Открыть</button>
     <button data-cmd="save" title="Сохранить в Unity (Ctrl+S)">Сохранить в Unity</button>
+    <button data-cmd="openFile" title="Открыть файл проекта .sforge или .aseprite с диска">Открыть файл</button>
+    <button data-cmd="exportProject" title="Скачать проект со слоями и кадрами (.sforge / .aseprite)">Экспорт проекта</button>
     <button data-cmd="importPng" title="Загрузить PNG с диска">Импорт PNG</button>
     <button data-cmd="exportPng" title="Скачать sprite sheet">Экспорт PNG</button>
     <button data-cmd="resize" title="Размер холста">Холст…</button>
@@ -30,6 +32,8 @@
     <label class="chk"><input type="checkbox" id="fillShape"> Заливка фигур</label>
     <label class="chk"><input type="checkbox" id="showGrid" checked> Сетка</label>
     <label class="chk"><input type="checkbox" id="onion"> Onion skin</label>
+    <label class="chk" title="Сила нажатия пера меняет размер кисти (до значения «Кисть»). Нужен включённый Windows Ink в драйвере XP-Pen"><input type="checkbox" id="pressureSize"> Нажим → размер</label>
+    <label class="chk" title="Не рисовать пальцем/ладонью на сенсорном экране — только пером и мышью"><input type="checkbox" id="palmReject" checked> Без касаний</label>
     <label>Pivot
       <select id="pivot">
         <option value="center">Центр</option>
@@ -106,6 +110,7 @@
   </div>
 </div>
 <input type="file" id="fileInput" accept="image/png" hidden>
+<input type="file" id="projectInput" accept=".sforge,.json,.aseprite,.ase" hidden>
 <div id="toast" hidden></div>
 <script src="app.js"></script>
 </body>

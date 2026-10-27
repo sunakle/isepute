@@ -96,8 +96,8 @@ function setPx(img, x, y, c) {
   const i = (y * img.width + x) * 4, d = img.data;
   d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = c[3];
 }
-function stamp(img, x, y, c) {
-  const s = +$('brushSize').value || 1;
+const brushSize = () => +$('brushSize').value || 1;
+function stamp(img, x, y, c, s = brushSize()) {
   if (s === 1) return setPx(img, x, y, c);
   const r = s / 2, off = Math.floor((s - 1) / 2), mid = (s - 1) / 2 - off;
   for (let dy = 0; dy < s; dy++) for (let dx = 0; dx < s; dx++) {
@@ -236,22 +236,40 @@ new ResizeObserver(() => { if (!ui.userView) { fitView(); updateStatus(); } requ
 
 // ---------------------------------------------------------------- input on canvas
 let drag = null, spaceDown = false;
-function toPx(e) { const r = view.getBoundingClientRect(); return { x: Math.floor((e.clientX - r.left - ui.ox) / ui.zoom), y: Math.floor((e.clientY - r.top - ui.oy) / ui.zoom), sx: e.clientX - r.left, sy: e.clientY - r.top }; }
+function toPx(e) {
+  const r = view.getBoundingClientRect();
+  return { x: Math.floor((e.clientX - r.left - ui.ox) / ui.zoom), y: Math.floor((e.clientY - r.top - ui.oy) / ui.zoom),
+    sx: e.clientX - r.left, sy: e.clientY - r.top, pen: e.pointerType === 'pen', pressure: e.pressure };
+}
+
+// Graphics tablets (XP-Pen etc.): pen arrives as pointerType 'pen'. The eraser end reports button 5 / buttons bit 32,
+// the barrel button acts like a right click. Touches right after pen use are treated as the palm and ignored.
+let lastPenTime = 0, penInfo = null;
+const isPenEraser = (e) => e.pointerType === 'pen' && (e.button === 5 || (e.buttons & 32) !== 0);
+function ignoreTouch(e) { return e.pointerType === 'touch' && ($('palmReject').checked || performance.now() - lastPenTime < 1500); }
+function notePen(e) {
+  if (e.pointerType !== 'pen') return;
+  lastPenTime = performance.now();
+  penInfo = { pressure: e.pressure, eraser: isPenEraser(e), tilt: [e.tiltX || 0, e.tiltY || 0] };
+}
 
 view.addEventListener('contextmenu', (e) => e.preventDefault());
 view.addEventListener('pointerdown', (e) => {
-  view.setPointerCapture(e.pointerId);
+  notePen(e);
+  if (ignoreTouch(e) || drag) return;
+  try { view.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
   const p = toPx(e);
-  if (e.button === 1 || spaceDown || ui.tool === 'hand') { drag = { kind: 'pan', sx: p.sx, sy: p.sy, ox: ui.ox, oy: ui.oy }; return; }
+  if (e.button === 1 || spaceDown || ui.tool === 'hand') { drag = { kind: 'pan', sx: p.sx, sy: p.sy, ox: ui.ox, oy: ui.oy, pointerId: e.pointerId }; return; }
   if (ui.playing) stopPlay();
   const right = e.button === 2;
   let tool = ui.tool;
   if (e.altKey && ['pencil', 'fill', 'line', 'rect', 'ellipse'].includes(tool)) tool = 'picker';
+  if (isPenEraser(e)) tool = 'eraser';
   const layer = doc.layers[ui.layer];
   if (['pencil', 'eraser', 'fill', 'line', 'rect', 'ellipse', 'move'].includes(tool) && !layer.visible) { toast('Слой скрыт — включите глаз в таймлайне'); return; }
   const color = tool === 'eraser' ? [0, 0, 0, 0] : (right ? ui.bg : ui.fg);
   const img = cel();
-  const base = { kind: tool, start: p, last: p, color, before: cloneImg(img), fid: doc.frames[ui.frame].id, lid: layer.id };
+  const base = { kind: tool, start: p, last: p, color, before: cloneImg(img), fid: doc.frames[ui.frame].id, lid: layer.id, pointerId: e.pointerId };
 
   if (tool === 'picker') { pick(p, right); drag = { kind: 'picker', right }; return; }
   if (tool === 'select') { drag = { kind: 'select', start: p }; ui.sel = null; requestRender(); return; }
@@ -273,9 +291,17 @@ view.addEventListener('pointerdown', (e) => {
   requestRender();
 });
 view.addEventListener('pointermove', (e) => {
+  notePen(e);
+  if (ignoreTouch(e) || (drag && drag.pointerId !== undefined && e.pointerId !== drag.pointerId)) return;
   const p = toPx(e);
   ui.hover = inBounds(p) ? p : null; updateStatus();
   if (!drag) { requestRender(); return; }
+  if (drag.kind === 'pencil' || drag.kind === 'eraser') {
+    // Tablets report ~200 Hz; coalesced events keep fast strokes continuous and pressure accurate.
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+    for (const ce of evs.length ? evs : [e]) paintTo(toPx(ce));
+    requestRender(); return;
+  }
   if (drag.kind === 'pan') { ui.ox = drag.ox + p.sx - drag.sx; ui.oy = drag.oy + p.sy - drag.sy; ui.userView = true; requestRender(); return; }
   if (drag.kind === 'picker') { pick(p, drag.right); return; }
   if (drag.kind === 'select') {
@@ -284,18 +310,20 @@ view.addEventListener('pointermove', (e) => {
     ui.sel = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }; requestRender(); return;
   }
   if (drag.kind === 'move') { moveTo(p); return; }
-  if (drag.kind === 'pencil' || drag.kind === 'eraser') paintTo(p);
-  else shapePreview(p, e.shiftKey);
+  shapePreview(p, e.shiftKey);
   requestRender();
 });
-view.addEventListener('pointerup', () => {
-  if (!drag) return;
+function endStroke(e) {
+  if (!drag || (drag.pointerId !== undefined && e.pointerId !== drag.pointerId)) return;
   const d = drag; drag = null;
   if (['pencil', 'eraser', 'line', 'rect', 'ellipse'].includes(d.kind)) commitCel(d);
   if (d.kind === 'move' && (d.dx || d.dy)) commitCel(d);
   if (d.kind === 'select' && ui.sel && ui.sel.w * ui.sel.h <= 1 && d.start) ui.sel = null;
   requestRender();
-});
+}
+view.addEventListener('pointerup', endStroke);
+// Windows Ink gestures can cancel a pen stroke; keep what was drawn instead of leaving the stroke open.
+view.addEventListener('pointercancel', endStroke);
 view.addEventListener('pointerleave', () => { ui.hover = null; updateStatus(); requestRender(); });
 view.addEventListener('wheel', (e) => {
   e.preventDefault();
@@ -311,13 +339,14 @@ const inBounds = (p) => p.x >= 0 && p.y >= 0 && p.x < doc.w && p.y < doc.h;
 
 function paintTo(p) {
   const img = cel(), pts = linePts(drag.last.x, drag.last.y, p.x, p.y);
-  const perfect = $('pixelPerfect').checked && (+$('brushSize').value || 1) === 1;
+  const size = p.pen && $('pressureSize').checked ? Math.max(1, Math.round(brushSize() * Math.min(1, p.pressure * 1.25))) : brushSize();
+  const perfect = $('pixelPerfect').checked && size === 1;
   for (const [x, y] of pts) {
     const pp = drag.pp, last = pp[pp.length - 1];
     if (last && last.x === x && last.y === y) continue;
     if (x < 0 || y < 0 || x >= doc.w || y >= doc.h) { pp.length = 0; continue; }
     const prev = getPx(img, x, y);
-    stamp(img, x, y, drag.color);
+    stamp(img, x, y, drag.color, size);
     pp.push({ x, y, prev });
     if (perfect && pp.length >= 3) {
       const a = pp[pp.length - 3], b = pp[pp.length - 2], c = pp[pp.length - 1];
@@ -375,6 +404,7 @@ function pick(p, right) {
 const cmds = {
   new: () => dlgNew(), open: () => dlgOpen(), save: () => saveToUnity(true), settings: () => dlgSettings(),
   exportPng: () => exportPng(), importPng: () => $('fileInput').click(), resize: () => dlgResize(),
+  exportProject: () => dlgExportProject(), openFile: () => $('projectInput').click(),
   play: () => (ui.playing ? stopPlay() : startPlay()),
   firstFrame: () => goFrame(0), lastFrame: () => goFrame(doc.frames.length - 1),
   prevFrame: () => goFrame((ui.frame - 1 + doc.frames.length) % doc.frames.length),
@@ -545,7 +575,9 @@ $('ppu').addEventListener('change', () => changed());
 $('brushSize').addEventListener('input', () => requestRender());
 
 function updateStatus() {
-  $('stPos').textContent = ui.hover ? `${ui.hover.x}, ${ui.hover.y}` : '—';
+  const pen = penInfo && performance.now() - lastPenTime < 2000
+    ? ` · перо ${penInfo.eraser ? '(ластик) ' : ''}нажим ${Math.round(penInfo.pressure * 100)}%` : '';
+  $('stPos').textContent = (ui.hover ? `${ui.hover.x}, ${ui.hover.y}` : '—') + pen;
   $('stSize').textContent = `${doc.w}×${doc.h}`;
   $('stFrame').textContent = `Кадр ${ui.frame + 1}/${doc.frames.length} · Слой: ${doc.layers[ui.layer]?.name || ''}`;
   $('stZoom').textContent = `${ui.zoom * 100}%`;
@@ -776,6 +808,175 @@ window.addEventListener('beforeunload', (e) => { if (ui.dirty) { e.preventDefaul
 
 let toastTimer;
 function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.hidden = true), 2600); }
+
+// ---------------------------------------------------------------- project files (.sforge / .aseprite)
+function downloadBlob(filename, blob) {
+  const a = document.createElement('a'); a.download = filename; a.href = URL.createObjectURL(blob); a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function dlgExportProject() {
+  const name = sanitize($('spriteName').value);
+  dialog('Экспорт проекта', `
+    <div class="hint">Сохраняется весь проект: слои, кадры, длительности, палитра — его можно открыть и продолжить рисовать.</div>
+    <div class="row"><button id="exSforge">${name}.sforge</button><span class="hint">формат SpriteForge — открывается кнопкой «Открыть файл»</span></div>
+    <div class="row"><button id="exAse">${name}.aseprite</button><span class="hint">открывается в Aseprite со слоями и анимацией</span></div>`, () => {
+    $('exSforge').onclick = () => { downloadBlob(name + '.sforge', new Blob([JSON.stringify(serialize())], { type: 'application/json' })); closeDialog(); };
+    $('exAse').onclick = () => { downloadBlob(name + '.aseprite', new Blob([buildAseprite()], { type: 'application/octet-stream' })); closeDialog(); };
+  });
+}
+
+// Writer for the Aseprite format (https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md).
+// RGBA sprite, one normal layer chunk per layer, raw (uncompressed) cels cropped to their content.
+function buildAseprite() {
+  const out = []; let size = 0;
+  function block(n) { const b = new DataView(new ArrayBuffer(n)); out.push(b); size += n; return b; }
+  function bytes(u8) { out.push(u8); size += u8.length; }
+  const enc = new TextEncoder();
+  const chunk = (type, body) => {
+    const h = block(6); h.setUint32(0, 6 + body.length, true); h.setUint16(4, type, true); bytes(body);
+  };
+  const writer = (n) => { const dv = new DataView(new ArrayBuffer(n)); let o = 0;
+    return { dv, u8: (v) => { dv.setUint8(o, v); o += 1; }, u16: (v) => { dv.setUint16(o, v, true); o += 2; },
+      i16: (v) => { dv.setInt16(o, v, true); o += 2; }, u32: (v) => { dv.setUint32(o, v, true); o += 4; },
+      raw: (a) => { new Uint8Array(dv.buffer).set(a, o); o += a.length; }, skip: (k) => { o += k; },
+      bytes: () => new Uint8Array(dv.buffer) }; };
+
+  const header = block(128);
+  header.setUint16(4, 0xA5E0, true);
+  header.setUint16(6, doc.frames.length, true);
+  header.setUint16(8, doc.w, true); header.setUint16(10, doc.h, true);
+  header.setUint16(12, 32, true);                 // RGBA
+  header.setUint32(14, 1, true);                  // layer opacity is valid
+  header.setUint16(18, doc.frames[0].duration, true);
+  header.setUint16(32, Math.min(ui.palette.length, 65535), true);
+  header.setUint8(34, 1); header.setUint8(35, 1); // square pixels
+  header.setUint16(40, 16, true); header.setUint16(42, 16, true);
+
+  doc.frames.forEach((f, fi) => {
+    const frameStart = size, fh = block(16);
+    let chunks = 0;
+    if (fi === 0) {
+      const pal = ui.palette, pw = writer(20 + pal.length * 6);
+      pw.u32(pal.length); pw.u32(0); pw.u32(Math.max(0, pal.length - 1)); pw.skip(8);
+      for (const c of pal) { pw.u16(0); pw.u8(c[0]); pw.u8(c[1]); pw.u8(c[2]); pw.u8(c[3]); }
+      chunk(0x2019, pw.bytes()); chunks++;
+      for (const l of doc.layers) {
+        const name = enc.encode(l.name), lw = writer(18 + name.length);
+        lw.u16((l.visible ? 1 : 0) | 2); lw.u16(0); lw.u16(0); lw.u16(0); lw.u16(0); lw.u16(0);
+        lw.u8(255); lw.skip(3); lw.u16(name.length); lw.raw(name);
+        chunk(0x2004, lw.bytes()); chunks++;
+      }
+    }
+    doc.layers.forEach((l, li) => {
+      const img = f.cels[l.id]; if (!img || celEmpty(img)) return;
+      let x0 = doc.w, y0 = doc.h, x1 = -1, y1 = -1;
+      for (let y = 0; y < doc.h; y++) for (let x = 0; x < doc.w; x++) if (img.data[(y * doc.w + x) * 4 + 3]) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+      const cw = x1 - x0 + 1, ch = y1 - y0 + 1, cwr = writer(20 + cw * ch * 4);
+      cwr.u16(li); cwr.i16(x0); cwr.i16(y0); cwr.u8(255); cwr.u16(0); cwr.i16(0); cwr.skip(5);
+      cwr.u16(cw); cwr.u16(ch);
+      for (let y = y0; y <= y1; y++) cwr.raw(img.data.subarray((y * doc.w + x0) * 4, (y * doc.w + x1 + 1) * 4));
+      chunk(0x2005, cwr.bytes()); chunks++;
+    });
+    fh.setUint32(0, size - frameStart, true);
+    fh.setUint16(4, 0xF1FA, true);
+    fh.setUint16(6, Math.min(chunks, 0xFFFF), true);
+    fh.setUint16(8, f.duration, true);
+    fh.setUint32(12, chunks, true);
+  });
+  header.setUint32(0, size, true);
+  const result = new Uint8Array(size); let o = 0;
+  for (const part of out) { const u8 = part instanceof Uint8Array ? part : new Uint8Array(part.buffer); result.set(u8, o); o += u8.length; }
+  return result;
+}
+
+// Reader for .aseprite/.ase: RGBA, grayscale and indexed sprites; raw, linked and zlib-compressed cels.
+async function parseAseprite(buf) {
+  const dv = new DataView(buf), dec = new TextDecoder();
+  if (dv.getUint16(4, true) !== 0xA5E0) throw new Error('это не файл Aseprite');
+  const nFrames = dv.getUint16(6, true), W = dv.getUint16(8, true), H = dv.getUint16(10, true), depth = dv.getUint16(12, true);
+  const transparentIdx = dv.getUint8(28);
+  const layers = [], frames = []; let palette = [];
+  const inflate = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
+  const toRgba = (src, n) => {
+    if (depth === 32) return src.subarray(0, n * 4);
+    const outp = new Uint8ClampedArray(n * 4);
+    for (let i = 0; i < n; i++) {
+      if (depth === 16) { const v = src[i * 2]; outp.set([v, v, v, src[i * 2 + 1]], i * 4); }
+      else { const idx = src[i]; const c = palette[idx] || [0, 0, 0, 0]; outp.set(idx === transparentIdx ? [0, 0, 0, 0] : c, i * 4); }
+    }
+    return outp;
+  };
+  let pos = 128;
+  for (let fi = 0; fi < nFrames; fi++) {
+    const fsize = dv.getUint32(pos, true), old = dv.getUint16(pos + 6, true), dur = dv.getUint16(pos + 8, true), nw = dv.getUint32(pos + 12, true);
+    const nChunks = nw || old, frame = { duration: dur || 100, cels: {} };
+    let cp = pos + 16;
+    for (let c = 0; c < nChunks; c++) {
+      const csize = dv.getUint32(cp, true), type = dv.getUint16(cp + 4, true), d = cp + 6;
+      if (type === 0x2004) {
+        const flags = dv.getUint16(d, true), ltype = dv.getUint16(d + 2, true), nlen = dv.getUint16(d + 16, true);
+        const name = dec.decode(new Uint8Array(buf, d + 18, nlen));
+        layers.push(ltype === 0 ? { name, visible: (flags & 1) !== 0 } : null); // groups/tilemaps are not drawable here
+      } else if (type === 0x2019) {
+        const first = dv.getUint32(d + 4, true), last = dv.getUint32(d + 8, true); let pp = d + 20;
+        for (let i = first; i <= last; i++) {
+          const fl = dv.getUint16(pp, true); palette[i] = [dv.getUint8(pp + 2), dv.getUint8(pp + 3), dv.getUint8(pp + 4), dv.getUint8(pp + 5)]; pp += 6;
+          if (fl & 1) pp += 2 + dv.getUint16(pp, true);
+        }
+      } else if (type === 0x2005) {
+        const li = dv.getUint16(d, true), cx = dv.getInt16(d + 2, true), cy = dv.getInt16(d + 4, true), op = dv.getUint8(d + 6), ct = dv.getUint16(d + 7, true);
+        if (layers[li]) {
+          let cw = 0, chh = 0, px = null;
+          if (ct === 1) { const linked = frames[dv.getUint16(d + 16, true)]; if (linked?.cels[li]) frame.cels[li] = linked.cels[li]; }
+          else if (ct === 0 || ct === 2) {
+            cw = dv.getUint16(d + 16, true); chh = dv.getUint16(d + 18, true);
+            const data = new Uint8Array(buf, d + 20, csize - 26);
+            px = toRgba(ct === 2 ? await inflate(data) : data, cw * chh);
+          }
+          if (px) {
+            const img = new ImageData(W, H);
+            for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) {
+              const tx = cx + x, ty = cy + y; if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+              const si = (y * cw + x) * 4, di = (ty * W + tx) * 4;
+              img.data[di] = px[si]; img.data[di + 1] = px[si + 1]; img.data[di + 2] = px[si + 2]; img.data[di + 3] = px[si + 3] * op / 255;
+            }
+            frame.cels[li] = img;
+          }
+        }
+      }
+      cp += csize;
+    }
+    frames.push(frame); pos += fsize;
+  }
+  return { W, H, layers, frames, palette: palette.filter(Boolean) };
+}
+async function loadAseprite(buf) {
+  const a = await parseAseprite(buf);
+  const keep = a.layers.map((l, i) => (l ? i : -1)).filter((i) => i >= 0);
+  if (!keep.length) throw new Error('в файле нет обычных слоёв');
+  doc.w = a.W; doc.h = a.H; doc.pivot = 'center';
+  const ids = {}; doc.layers = keep.map((i) => { ids[i] = nid(); return { id: ids[i], name: a.layers[i].name, visible: a.layers[i].visible }; });
+  doc.frames = a.frames.map((f) => ({ id: nid(), duration: f.duration,
+    cels: Object.fromEntries(keep.filter((i) => f.cels[i]).map((i) => [ids[i], cloneImg(f.cels[i])])) }));
+  if (a.palette.length) ui.palette = a.palette.map((c) => [...c]);
+  ui.frame = 0; ui.layer = doc.layers.length - 1; ui.sel = null; history.undo = []; history.redo = [];
+  rebuildBuffers(); fitView(); refreshAll();
+}
+$('projectInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+  try {
+    if (/\.(aseprite|ase)$/i.test(file.name)) await loadAseprite(await file.arrayBuffer());
+    else {
+      const p = JSON.parse(await file.text());
+      if (p.format !== 'spriteforge') throw new Error('это не проект SpriteForge');
+      await loadProject(p);
+    }
+    $('spriteName').value = sanitize(file.name.replace(/\.(sforge|json|aseprite|ase)$/i, ''));
+    changed(); toast('Открыт проект: ' + file.name);
+  } catch (err) { toast('Не удалось открыть: ' + err.message); }
+});
 
 // ---------------------------------------------------------------- boot
 buildTools();
